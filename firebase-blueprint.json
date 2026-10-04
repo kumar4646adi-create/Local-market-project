@@ -1,0 +1,239 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile across Customer, Retailer, and Admin roles",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["customer", "retailer", "admin"]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["role", "name", "createdAt"]
+    },
+    "Retailer": {
+      "title": "Retailer",
+      "description": "Local dukaan and merchant profile in Himachal North",
+      "type": "object",
+      "properties": {
+        "ownerName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "shopName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "city": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "area": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "pincode": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "latitude": {
+          "type": "number"
+        },
+        "longitude": {
+          "type": "number"
+        },
+        "openingTime": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "closingTime": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "closedDay": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "logoUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "fulfillmentOptions": {
+          "type": "array"
+        },
+        "preparationTime": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending_review", "active", "action_required", "rejected", "suspended"]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "approvedAt": {
+          "type": "string"
+        },
+        "approvedBy": {
+          "type": "string"
+        },
+        "rejectionReason": {
+          "type": "string"
+        }
+      },
+      "required": ["ownerName", "shopName", "category", "phone", "address", "city", "area", "status", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Item stocked by an authorized retailer",
+      "type": "object",
+      "properties": {
+        "retailerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "price": {
+          "type": "number"
+        },
+        "stock": {
+          "type": "number"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["retailerId", "name", "price", "available", "createdAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Smart Pickup or Store Delivery consumer order",
+      "type": "object",
+      "properties": {
+        "customerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "customerName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "customerPhone": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "retailerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "retailerName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "items": {
+          "type": "array"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "fulfillmentType": {
+          "type": "string",
+          "enum": ["Smart Pickup", "Store Delivery"]
+        },
+        "customerETA": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "preparing", "ready", "arrived", "completed", "cancelled"]
+        },
+        "orderNumber": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["retailerId", "totalAmount", "fulfillmentType", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles"
+    },
+    "/retailers/{retailerId}": {
+      "schema": { "$ref": "#/entities/Retailer" },
+      "description": "Retailers directory"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Store products"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Hyperlocal order stream"
+    }
+  }
+}

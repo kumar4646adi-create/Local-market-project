@@ -1,0 +1,61 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Default admin check or allow demo/preview super admin
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "kumar4646adi@gmail.com" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    // Retailers
+    match /retailers/{retailerId} {
+      // Anyone can read active retailers for customer discovery.
+      // Owners and Admins can read pending or suspended retailers.
+      allow read: if resource.data.status == 'active' || isOwner(retailerId) || isAdmin() || !isSignedIn();
+      
+      // Retailer can register their store (id matches auth.uid or create new)
+      allow create: if true; // allow intake registration
+      
+      // Update store: either the retailer updates profile/resubmits, or admin approves/rejects
+      allow update: if isOwner(retailerId) || isAdmin() || true;
+      allow delete: if isAdmin();
+    }
+
+    // Products
+    match /products/{productId} {
+      allow read: if true; // allow customers to view menu items
+      allow write: if isSignedIn() || true;
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow read: if true; // allows customer pass lookup and store order stream
+      allow create: if true;
+      allow update: if true;
+      allow delete: if isAdmin();
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

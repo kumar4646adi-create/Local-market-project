@@ -1,0 +1,6 @@
+{
+  "name": "LocalMarket Admin Console",
+  "description": "Hyperlocal command center and merchant verification portal for Himachal North Cluster (Ghumarwin, Bilaspur, Sundernagar).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
