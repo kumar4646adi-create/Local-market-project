@@ -45,9 +45,43 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
     'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=400&q=80'
   );
 
+  // Settings State
+  const [openingTime, setOpeningTime] = useState(currentRetailer?.openingTime || '08:00 AM');
+  const [closingTime, setClosingTime] = useState(currentRetailer?.closingTime || '09:00 PM');
+  const [closedDay, setClosedDay] = useState(currentRetailer?.closedDay || 'None');
+  const [temporarilyClosed, setTemporarilyClosed] = useState(currentRetailer?.temporarilyClosed || false);
+  const [enableSmartPickup, setEnableSmartPickup] = useState(
+    currentRetailer?.fulfillmentOptions?.includes('Smart Pickup') ?? true
+  );
+  const [enableDirectDelivery, setEnableDirectDelivery] = useState(
+    currentRetailer?.fulfillmentOptions?.includes('Retailer Direct Delivery') ?? false
+  );
+  const [preparationTime, setPreparationTime] = useState(currentRetailer?.preparationTime || '15 mins');
+  const [logoUrl, setLogoUrl] = useState(currentRetailer?.logoUrl || '');
+  const [shopImageUrl, setShopImageUrl] = useState(currentRetailer?.shopImageUrl || '');
+  const [paymentQrUrl, setPaymentQrUrl] = useState(currentRetailer?.paymentQrUrl || '');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [previewQrModal, setPreviewQrModal] = useState(false);
+
   // Resubmission state
   const [isResubmitting, setIsResubmitting] = useState(false);
   const [resubmitAddress, setResubmitAddress] = useState('');
+
+  // Sync settings when currentRetailer updates
+  useEffect(() => {
+    if (currentRetailer) {
+      setOpeningTime(currentRetailer.openingTime || '08:00 AM');
+      setClosingTime(currentRetailer.closingTime || '09:00 PM');
+      setClosedDay(currentRetailer.closedDay || 'None');
+      setTemporarilyClosed(currentRetailer.temporarilyClosed || false);
+      setEnableSmartPickup(currentRetailer.fulfillmentOptions?.includes('Smart Pickup') ?? true);
+      setEnableDirectDelivery(currentRetailer.fulfillmentOptions?.includes('Retailer Direct Delivery') ?? false);
+      setPreparationTime(currentRetailer.preparationTime || '15 mins');
+      setLogoUrl(currentRetailer.logoUrl || '');
+      setShopImageUrl(currentRetailer.shopImageUrl || '');
+      setPaymentQrUrl(currentRetailer.paymentQrUrl || '');
+    }
+  }, [currentRetailer]);
 
   // Subscribe to real-time products & orders when currentRetailer changes
   useEffect(() => {
@@ -127,10 +161,57 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
     }
   };
 
+  // Image Upload helper
+  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: (val: string) => void) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 3 * 1024 * 1024) {
+        alert('File size exceeds 3MB limit.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setter(event.target.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Save Settings
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentRetailer?.id) return;
+    setIsSavingSettings(true);
+    try {
+      const fulfillmentOptions: ('Smart Pickup' | 'Retailer Direct Delivery')[] = [];
+      if (enableSmartPickup) fulfillmentOptions.push('Smart Pickup');
+      if (enableDirectDelivery) fulfillmentOptions.push('Retailer Direct Delivery');
+
+      await updateRetailerProfile(currentRetailer.id, {
+        openingTime,
+        closingTime,
+        closedDay,
+        temporarilyClosed,
+        fulfillmentOptions,
+        preparationTime,
+        logoUrl,
+        shopImageUrl,
+        paymentQrUrl,
+      });
+      alert('Store settings & payment QR updated successfully!');
+    } catch (err: any) {
+      alert(`Failed to save settings: ${err.message}`);
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
   // Metrics
   const todayOrders = orders;
   const todaySales = orders.reduce((sum, o) => (o.status === 'completed' ? sum + o.totalAmount : sum), 0);
-  const pendingOrders = orders.filter((o) => o.status === 'pending' || o.status === 'preparing');
+  const pendingOrders = orders.filter((o) => o.status === 'placed' || o.status === 'pending' || o.status === 'preparing');
   const completedOrders = orders.filter((o) => o.status === 'completed');
   const pickupOrders = orders.filter((o) => o.fulfillmentType === 'Smart Pickup');
   const deliveryOrders = orders.filter((o) => o.fulfillmentType === 'Store Delivery');
@@ -162,23 +243,25 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
           available: pAvailable,
           description: pDescription.trim(),
           imageUrl: pImageUrl.trim(),
-          createdAt: new Date().toISOString(),
         });
       }
-      setIsProductModalOpen(false);
+
       resetProductForm();
+      setIsProductModalOpen(false);
     } catch (err: any) {
-      alert(`Product save failed: ${err.message}`);
+      alert(`Failed to save product: ${err.message}`);
     }
   };
 
   const resetProductForm = () => {
     setEditingProductId(null);
     setPName('');
+    setPCategory('Groceries');
     setPPrice(100);
     setPStock(25);
     setPAvailable(true);
     setPDescription('');
+    setPImageUrl('https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=400&q=80');
   };
 
   const handleOpenEditProduct = (prod: Product) => {
@@ -193,9 +276,12 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
     setIsProductModalOpen(true);
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (confirm('Delete this product from your inventory?')) {
-      await deleteProduct(id);
+  const handleDeleteProduct = async (productId: string) => {
+    if (!window.confirm('Delete this product from your store inventory?')) return;
+    try {
+      await deleteProduct(productId);
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`);
     }
   };
 
@@ -269,7 +355,7 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
               <p className="font-body-md text-body-md text-on-surface-variant">
                 Your store application for <strong>{currentRetailer.shopName}</strong> was submitted on{' '}
                 {new Date(currentRetailer.createdAt).toLocaleDateString()}. The Super Admin is reviewing your
-                business details, FSSAI compliance, and GPS geofencing.
+                business details, GSTIN compliance, and coordinates.
               </p>
               <div className="mt-3 p-3 rounded-lg bg-surface-container-low font-body-sm text-body-sm text-on-surface-variant flex items-center justify-between">
                 <span>Once approved, your storefront will immediately go live for customers.</span>
@@ -349,13 +435,13 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
             </div>
 
             <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xs">
-              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Today's Sales</span>
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase">GMV Today</span>
               <p className="font-headline-sm text-headline-sm font-bold text-secondary mt-1">₹{todaySales}</p>
             </div>
 
             <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xs">
-              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Pending</span>
-              <p className="font-headline-sm text-headline-sm font-bold text-on-surface mt-1">{pendingOrders.length}</p>
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Pending Queue</span>
+              <p className="font-headline-sm text-headline-sm font-bold text-amber-600 mt-1">{pendingOrders.length}</p>
             </div>
 
             <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xs">
@@ -364,7 +450,7 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
             </div>
 
             <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xs">
-              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Pickup Passes</span>
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Smart Pickups</span>
               <p className="font-headline-sm text-headline-sm font-bold text-on-surface mt-1">{pickupOrders.length}</p>
             </div>
 
@@ -374,7 +460,7 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
             </div>
 
             <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xs">
-              <span className="text-[11px] font-bold text-error uppercase">Low Stock</span>
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase">Low Stock SKUs</span>
               <p className="font-headline-sm text-headline-sm font-bold text-error mt-1">{lowStockProducts.length}</p>
             </div>
           </div>
@@ -400,6 +486,17 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
               }`}
             >
               Product & Inventory Catalog ({products.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`px-4 py-2 rounded-lg font-label-md text-label-md font-bold transition flex items-center gap-1.5 ${
+                activeTab === 'settings'
+                  ? 'bg-primary text-on-primary shadow-xs'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[18px]">settings</span>
+              <span>Store Settings & Payment QR</span>
             </button>
           </div>
 
@@ -439,61 +536,55 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {orders.map((order) => {
                     const isArrived = order.status === 'arrived';
-                    const isReady = order.status === 'ready';
                     const isCompleted = order.status === 'completed';
 
                     return (
                       <div
                         key={order.id}
-                        className={`p-5 rounded-2xl bg-surface-container-lowest border transition-all ${
+                        className={`p-5 rounded-2xl bg-surface-container-lowest border space-y-3 shadow-xs ${
                           isArrived
-                            ? 'border-secondary ring-2 ring-secondary/30 shadow-md bg-secondary-container/10'
-                            : 'border-outline-variant/20 shadow-xs'
+                            ? 'border-secondary ring-2 ring-secondary/40'
+                            : 'border-outline-variant/20'
                         }`}
                       >
                         <div className="flex items-start justify-between">
                           <div>
-                            <span className="font-label-sm text-label-sm uppercase font-bold text-on-surface-variant">
-                              {order.orderNumber || order.id}
+                            <span className="font-label-sm text-label-sm font-bold text-secondary uppercase">
+                              {order.fulfillmentType}
                             </span>
-                            <h4 className="font-headline-sm text-[16px] font-bold text-on-surface mt-0.5">
-                              {order.customerName}
+                            <h4 className="font-headline-sm text-headline-sm font-bold text-on-surface mt-0.5">
+                              {order.orderNumber}
                             </h4>
+                            <p className="font-body-sm text-body-sm text-on-surface-variant">
+                              Customer: <strong>{order.customerName}</strong> ({order.customerPhone || 'N/A'})
+                            </p>
                           </div>
                           <span
-                            className={`px-2.5 py-0.5 rounded-full font-label-sm text-label-sm font-bold uppercase ${
+                            className={`px-3 py-1 rounded-full font-label-sm text-label-sm font-bold uppercase ${
                               isCompleted
                                 ? 'bg-surface-container text-on-surface-variant'
                                 : isArrived
-                                ? 'bg-secondary text-on-secondary animate-pulse'
-                                : isReady
-                                ? 'bg-secondary-container text-on-secondary-container'
-                                : 'bg-tertiary-fixed text-on-tertiary-fixed'
+                                ? 'bg-secondary text-on-secondary animate-bounce'
+                                : 'bg-secondary-container text-on-secondary-container'
                             }`}
                           >
-                            {order.status === 'arrived' ? 'Customer Arrived!' : order.status}
+                            {order.status}
                           </span>
                         </div>
 
-                        {/* Order Items */}
-                        <div className="mt-3 p-3 bg-surface-container-low rounded-xl text-body-sm font-body-sm space-y-1">
-                          <div className="flex justify-between font-bold text-on-surface border-b border-outline-variant/20 pb-1 mb-1">
-                            <span>Fulfillment: {order.fulfillmentType}</span>
-                            <span>ETA: {order.customerETA}</span>
-                          </div>
-                          {order.items.map((item, idx) => (
-                            <div key={idx} className="flex justify-between text-on-surface-variant">
+                        {/* Order items */}
+                        <div className="p-3 bg-surface-container-low rounded-xl space-y-1.5 text-body-sm font-body-sm">
+                          {order.items.map((it, idx) => (
+                            <div key={idx} className="flex justify-between text-on-surface">
                               <span>
-                                {item.quantity}x {item.name}
+                                {it.quantity}x {it.name}
                               </span>
-                              <span className="font-semibold text-on-surface">
-                                ₹{item.price * item.quantity}
-                              </span>
+                              <span className="font-bold">₹{it.price * it.quantity}</span>
                             </div>
                           ))}
-                          <div className="flex justify-between font-bold text-on-surface pt-1 border-t border-outline-variant/20">
-                            <span>Total Amount</span>
-                            <span className="text-secondary text-base">₹{order.totalAmount}</span>
+                          <div className="pt-2 border-t border-outline-variant/20 flex justify-between font-bold text-on-surface">
+                            <span>Total Bill:</span>
+                            <span className="text-secondary font-bold">₹{order.totalAmount}</span>
                           </div>
                         </div>
 
@@ -512,7 +603,7 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
 
                         {/* Order Action Buttons */}
                         <div className="mt-4 flex items-center justify-end gap-2 pt-2 border-t border-outline-variant/20">
-                          {order.status === 'pending' && (
+                          {(order.status === 'placed' || order.status === 'pending') && (
                             <button
                               onClick={() => updateOrderStatus(order.id, 'preparing')}
                               className="px-4 py-1.5 rounded-lg bg-primary text-on-primary font-label-sm text-label-sm font-bold shadow-xs hover:bg-neutral-800 transition"
@@ -670,6 +761,272 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
               )}
             </div>
           )}
+
+          {/* TAB 3: STORE SETTINGS & PAYMENT QR */}
+          {activeTab === 'settings' && (
+            <form onSubmit={handleSaveSettings} className="space-y-6">
+              {/* Timings & Operational Status */}
+              <div className="bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/20 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                    Store Timings & Operational Controls
+                  </h3>
+                  <span className="text-xs font-bold text-secondary uppercase bg-secondary-container px-2.5 py-1 rounded-full">
+                    Live Configuration
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-on-surface-variant uppercase mb-1">
+                      Opening Time
+                    </label>
+                    <input
+                      type="text"
+                      value={openingTime}
+                      onChange={(e) => setOpeningTime(e.target.value)}
+                      placeholder="e.g. 08:00 AM"
+                      className="w-full px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-md"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-on-surface-variant uppercase mb-1">
+                      Closing Time
+                    </label>
+                    <input
+                      type="text"
+                      value={closingTime}
+                      onChange={(e) => setClosingTime(e.target.value)}
+                      placeholder="e.g. 09:00 PM"
+                      className="w-full px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-md"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-on-surface-variant uppercase mb-1">
+                      Weekly Closed Day
+                    </label>
+                    <select
+                      value={closedDay}
+                      onChange={(e) => setClosedDay(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-md"
+                    >
+                      <option value="None">None (Open 7 Days)</option>
+                      <option value="Sunday">Sunday</option>
+                      <option value="Monday">Monday</option>
+                      <option value="Tuesday">Tuesday</option>
+                      <option value="Wednesday">Wednesday</option>
+                      <option value="Thursday">Thursday</option>
+                      <option value="Friday">Friday</option>
+                      <option value="Saturday">Saturday</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-on-surface-variant uppercase mb-1">
+                      Handover SLA
+                    </label>
+                    <input
+                      type="text"
+                      value={preparationTime}
+                      onChange={(e) => setPreparationTime(e.target.value)}
+                      placeholder="e.g. 15 mins"
+                      className="w-full px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-md"
+                    />
+                  </div>
+                </div>
+
+                {/* Temporarily Closed & Fulfillment Options */}
+                <div className="pt-3 border-t border-outline-variant/20 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="flex items-center gap-2 p-3 bg-surface-container-low rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={temporarilyClosed}
+                      onChange={(e) => setTemporarilyClosed(e.target.checked)}
+                      className="w-5 h-5 accent-error"
+                    />
+                    <span className="text-xs font-bold text-on-surface">Mark Store Temporarily Closed</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 p-3 bg-surface-container-low rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enableSmartPickup}
+                      onChange={(e) => setEnableSmartPickup(e.target.checked)}
+                      className="w-5 h-5 accent-secondary"
+                    />
+                    <span className="text-xs font-bold text-on-surface">Enable Smart Pickup</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 p-3 bg-surface-container-low rounded-xl cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enableDirectDelivery}
+                      onChange={(e) => setEnableDirectDelivery(e.target.checked)}
+                      className="w-5 h-5 accent-secondary"
+                    />
+                    <span className="text-xs font-bold text-on-surface">Enable Direct Delivery</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Retailer Payment QR Section */}
+              <div className="bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/20 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                      Payment QR (UPI Direct to Store)
+                    </h3>
+                    <p className="font-body-sm text-body-sm text-on-surface-variant">
+                      Upload your real store UPI QR code so customers can scan and pay directly to your account.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded bg-secondary-container text-on-secondary-container text-xs font-bold">
+                    Pay Directly to This Store
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                  {/* Left: QR Controls */}
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold uppercase text-on-surface-variant">
+                      Upload UPI QR Code Image
+                    </label>
+
+                    <div className="flex items-center gap-3">
+                      <label className="px-4 py-2 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition cursor-pointer flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[18px]">upload</span>
+                        <span>{paymentQrUrl ? 'Replace QR' : 'Upload QR Image'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleImageFileChange(e, setPaymentQrUrl)}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {paymentQrUrl && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewQrModal(true)}
+                            className="px-3 py-2 rounded-xl bg-surface-container text-on-surface font-label-sm text-label-sm font-bold hover:bg-surface-container-high transition flex items-center gap-1"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">visibility</span>
+                            <span>Preview</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setPaymentQrUrl('')}
+                            className="px-3 py-2 rounded-xl bg-error-container text-on-error-container font-label-sm text-label-sm font-bold hover:opacity-90 transition flex items-center gap-1"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                            <span>Delete QR</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-on-surface-variant">
+                      Accepts standard BharatPe, Google Pay, Paytm, PhonePe, or BHIM merchant QR images.
+                    </p>
+                  </div>
+
+                  {/* Right: QR Preview Display */}
+                  <div className="p-4 bg-surface-container-low rounded-xl border border-outline-variant/30 flex flex-col items-center text-center space-y-2">
+                    {paymentQrUrl ? (
+                      <>
+                        <img
+                          src={paymentQrUrl}
+                          alt="Merchant UPI QR Code"
+                          className="w-40 h-40 object-contain rounded-lg border border-outline-variant/30 bg-white p-2 shadow-xs"
+                        />
+                        <p className="text-xs font-bold text-on-surface">
+                          "Pay directly to this store"
+                        </p>
+                        <p className="text-[11px] text-on-surface-variant font-mono">
+                          {currentRetailer.shopName} UPI Gateway
+                        </p>
+                      </>
+                    ) : (
+                      <div className="py-8 text-on-surface-variant space-y-2">
+                        <span className="material-symbols-outlined text-[36px]">qr_code_2</span>
+                        <p className="text-xs font-semibold">No UPI QR code uploaded yet</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Store Branding & Photographs */}
+              <div className="bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/20 shadow-xs space-y-4">
+                <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                  Store Logo & Shop Photographs
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Logo */}
+                  <div className="p-4 bg-surface-container-low rounded-xl border border-outline-variant/30 space-y-3">
+                    <label className="block text-xs font-bold uppercase text-on-surface-variant">
+                      Store Logo
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={logoUrl || 'https://via.placeholder.com/80'}
+                        alt="Store Logo"
+                        className="w-16 h-16 rounded-xl object-cover border border-outline-variant/30 shrink-0"
+                      />
+                      <label className="px-3 py-1.5 rounded-lg bg-surface-container-lowest border border-outline-variant/30 text-on-surface font-label-sm text-label-sm font-bold cursor-pointer hover:bg-surface-container">
+                        Replace Logo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleImageFileChange(e, setLogoUrl)}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Shop Image */}
+                  <div className="p-4 bg-surface-container-low rounded-xl border border-outline-variant/30 space-y-3">
+                    <label className="block text-xs font-bold uppercase text-on-surface-variant">
+                      Main Storefront Photograph
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={shopImageUrl || 'https://via.placeholder.com/120x80'}
+                        alt="Shop Front"
+                        className="w-24 h-16 rounded-xl object-cover border border-outline-variant/30 shrink-0"
+                      />
+                      <label className="px-3 py-1.5 rounded-lg bg-surface-container-lowest border border-outline-variant/30 text-on-surface font-label-sm text-label-sm font-bold cursor-pointer hover:bg-surface-container">
+                        Replace Photo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleImageFileChange(e, setShopImageUrl)}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Submit / Save Button */}
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingSettings}
+                  className="px-8 py-3 rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-bold shadow-md hover:bg-neutral-800 disabled:opacity-50 transition"
+                >
+                  {isSavingSettings ? 'Saving Settings...' : 'Save Storefront Settings'}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
 
@@ -808,6 +1165,33 @@ export const RetailerPortalView: React.FC<RetailerPortalViewProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* QR Code Zoom Preview Modal */}
+      {previewQrModal && paymentQrUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setPreviewQrModal(false)} />
+          <div className="relative bg-surface-container-lowest p-6 rounded-2xl shadow-2xl max-w-sm w-full border border-outline-variant/30 text-center space-y-4 z-10 animate-in zoom-in-95">
+            <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+              Store UPI QR Code
+            </h3>
+            <p className="text-xs text-on-surface-variant font-bold uppercase">
+              Pay Directly to This Store
+            </p>
+            <div className="p-4 bg-white rounded-xl border border-outline-variant/20 inline-block shadow-sm">
+              <img src={paymentQrUrl} alt="Store QR Preview" className="w-56 h-56 object-contain" />
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              This QR code is presented to customers during counter and delivery checkouts.
+            </p>
+            <button
+              onClick={() => setPreviewQrModal(false)}
+              className="w-full py-2.5 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition"
+            >
+              Close Preview
+            </button>
+          </div>
         </div>
       )}
     </div>

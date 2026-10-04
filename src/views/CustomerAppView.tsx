@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Retailer, Product, Order, OrderItem } from '../types';
+import { Retailer, Product, Order, OrderItem, StoreReview, PaymentMethod } from '../types';
 import {
   subscribeActiveRetailers,
   subscribeRetailerProducts,
   subscribeCustomerOrders,
   createOrder,
-  updateOrderStatus
+  updateOrderStatus,
+  subscribeStoreReviews,
+  addStoreReview
 } from '../services/firebaseService';
 
 interface CustomerAppViewProps {
@@ -22,24 +24,45 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
   const [activeStores, setActiveStores] = useState<Retailer[]>([]);
   const [selectedStore, setSelectedStore] = useState<Retailer | null>(null);
   const [storeProducts, setStoreProducts] = useState<Product[]>([]);
+  const [storeReviews, setStoreReviews] = useState<StoreReview[]>([]);
+  const [storeTab, setStoreTab] = useState<'products' | 'reviews'>('products');
+
+  // Search & Category Filter
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('All');
 
   // Cart: Map from productId to { product, quantity }
   const [cart, setCart] = useState<Record<string, { product: Product; quantity: number }>>({});
   const [isCartOpen, setIsCartOpen] = useState(false);
 
-  // Fulfillment Choice in Checkout
+  // Fulfillment & Checkout State
   const [fulfillmentType, setFulfillmentType] = useState<'Smart Pickup' | 'Store Delivery'>('Smart Pickup');
   const [selectedETA, setSelectedETA] = useState<string>('20 min');
   const [customerName, setCustomerName] = useState('Rahul Kumar');
   const [customerPhone, setCustomerPhone] = useState('+91 94182 11094');
   const [deliveryAddress, setDeliveryAddress] = useState('House #24, Near Civil Hospital, Ghumarwin');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('upi_qr');
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
 
-  // Customer Orders
+  // Customer Orders & Active Tab
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [activeTab, setActiveTab] = useState<'explore' | 'passes'>('explore');
 
-  // Customer ID for demo simulation
+  // Review Modal State
+  const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
+  const [ratingVal, setRatingVal] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>(['Quick Counter Pickup', 'Fresh Quality']);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+
+  // Real-time tick for 5-minute edit window countdown
+  const [, setClockTick] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClockTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Customer ID for persistent session
   const customerId = 'cust-rahul-hp01';
 
   // Real-time listener for active stores
@@ -47,7 +70,6 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
     const unsub = subscribeActiveRetailers((stores) => {
       setActiveStores(stores);
       if (selectedStore) {
-        // refresh current store if status changed
         const refreshed = stores.find((s) => s.id === selectedStore.id);
         if (refreshed) setSelectedStore(refreshed);
       }
@@ -63,30 +85,90 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
     return () => unsub();
   }, []);
 
-  // Fetch products when a store is selected
+  // Fetch products and reviews when a store is selected
   useEffect(() => {
     if (!selectedStore) {
       setStoreProducts([]);
+      setStoreReviews([]);
       return;
     }
-    const unsub = subscribeRetailerProducts(selectedStore.id, (prods) => {
+    const unsubProds = subscribeRetailerProducts(selectedStore.id, (prods) => {
       setStoreProducts(prods);
     });
-    return () => unsub();
+    const unsubReviews = subscribeStoreReviews(selectedStore.id, (revs) => {
+      setStoreReviews(revs);
+    });
+    return () => {
+      unsubProds();
+      unsubReviews();
+    };
   }, [selectedStore?.id]);
 
-  // Distance calculator simulation relative to town center
+  // Distance calculator relative to selected town center
   const getSimulatedDistance = (store: Retailer) => {
     if (store.city.toLowerCase() !== selectedTown.toLowerCase()) {
       return (14.5 + Math.abs(store.latitude - 31.4429) * 10).toFixed(1);
     }
-    // Same town: simulated between 0.4 and 2.4 km
     const dist = (0.5 + Math.abs(store.latitude % 0.05) * 20).toFixed(1);
     return dist;
   };
 
+  // Dynamic Open / Closed Status based on Store Timings
+  const getStoreTimingStatus = (store: Retailer) => {
+    if (store.temporarilyClosed) {
+      return { isOpen: false, text: 'CLOSED TEMPORARILY', color: 'bg-error-container text-on-error-container' };
+    }
+    const now = new Date();
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const currentDayName = days[now.getDay()];
+
+    if (store.closedDay && store.closedDay.toLowerCase() === currentDayName.toLowerCase()) {
+      return { isOpen: false, text: `CLOSED TODAY (${store.closedDay.toUpperCase()})`, color: 'bg-error-container text-on-error-container' };
+    }
+    if (store.closedDays && store.closedDays.map((d) => d.toLowerCase()).includes(currentDayName.toLowerCase())) {
+      return { isOpen: false, text: `CLOSED TODAY (${currentDayName.toUpperCase()})`, color: 'bg-error-container text-on-error-container' };
+    }
+
+    const parseTime = (timeStr?: string) => {
+      if (!timeStr) return null;
+      const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+      if (!match) return null;
+      let hours = parseInt(match[1], 10);
+      const minutes = parseInt(match[2], 10);
+      const meridiem = match[3]?.toUpperCase();
+      if (meridiem === 'PM' && hours < 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    };
+
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const openMinutes = parseTime(store.openingTime);
+    const closeMinutes = parseTime(store.closingTime);
+
+    if (openMinutes !== null && closeMinutes !== null) {
+      if (currentMinutes < openMinutes) {
+        return { isOpen: false, text: `CLOSED • OPENS AT ${store.openingTime}`, color: 'bg-amber-100 text-amber-900 border border-amber-300' };
+      }
+      if (currentMinutes >= closeMinutes) {
+        return { isOpen: false, text: `CLOSED • OPENS AT ${store.openingTime}`, color: 'bg-amber-100 text-amber-900 border border-amber-300' };
+      }
+      return { isOpen: true, text: `OPEN • CLOSES AT ${store.closingTime}`, color: 'bg-emerald-100 text-emerald-800 border border-emerald-300' };
+    }
+
+    return { isOpen: true, text: 'OPEN', color: 'bg-emerald-100 text-emerald-800 border border-emerald-300' };
+  };
+
   // Filter and sort stores
-  const sortedStores = [...activeStores]
+  const filteredStores = activeStores.filter((store) => {
+    const matchesSearch =
+      store.shopName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      store.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      store.area.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCat = categoryFilter === 'All' || store.category.toLowerCase().includes(categoryFilter.toLowerCase());
+    return matchesSearch && matchesCat;
+  });
+
+  const sortedStores = [...filteredStores]
     .map((store) => ({
       ...store,
       distanceKm: parseFloat(getSimulatedDistance(store)),
@@ -125,7 +207,7 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
   const cartItems = Object.values(cart);
   const cartTotal = cartItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
 
-  // Place Order
+  // Place Order with 5-minute edit window & payment method
   const handlePlaceOrder = async () => {
     if (!selectedStore || cartItems.length === 0) return;
 
@@ -133,6 +215,8 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
     try {
       const orderNumber = `#LM-${Math.floor(1000 + Math.random() * 9000)}`;
       const qrCodeToken = `PASS-${Math.floor(100000 + Math.random() * 900000)}`;
+      const nowIso = new Date().toISOString();
+      const editExpiresIso = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
       const orderItems: OrderItem[] = cartItems.map((ci) => ({
         productId: ci.product.id,
@@ -151,18 +235,21 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
         totalAmount: cartTotal,
         fulfillmentType,
         customerETA: fulfillmentType === 'Smart Pickup' ? selectedETA : 'Store Dispatched',
-        status: 'pending',
+        status: 'placed',
         orderNumber,
         qrCodeToken,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: nowIso,
+        placedAt: nowIso,
+        editWindowExpiresAt: editExpiresIso,
+        paymentStatus: paymentMethod === 'upi_qr' ? 'paid' : 'pending',
+        paymentMethod,
+        updatedAt: nowIso,
         deliveryAddress: fulfillmentType === 'Store Delivery' ? deliveryAddress : undefined,
       });
 
       setCart({});
       setIsCartOpen(false);
       setActiveTab('passes');
-      alert(`Order ${orderNumber} placed successfully! The merchant has been notified in real time.`);
     } catch (err: any) {
       alert(`Order placement failed: ${err.message}`);
     } finally {
@@ -174,15 +261,47 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
   const handleMarkArrivedAtCounter = async (orderId: string) => {
     try {
       await updateOrderStatus(orderId, 'arrived');
-      alert('Counter staff alerted! Please present your pass QR / Token at the billing desk.');
     } catch (err: any) {
       alert(`Update failed: ${err.message}`);
     }
   };
 
+  // Cancel order within 5-minute window
+  const handleCancelOrder = async (order: Order) => {
+    if (!window.confirm(`Are you sure you want to cancel order ${order.orderNumber}?`)) return;
+    try {
+      await updateOrderStatus(order.id, 'cancelled');
+    } catch (err: any) {
+      alert(`Cancellation failed: ${err.message}`);
+    }
+  };
+
+  // Submit Rating & Review
+  const handleSubmitReview = async () => {
+    if (!reviewOrder) return;
+    setIsSubmittingReview(true);
+    try {
+      await addStoreReview({
+        retailerId: reviewOrder.retailerId,
+        orderId: reviewOrder.id,
+        customerId,
+        customerName,
+        rating: ratingVal,
+        tags: selectedTags,
+        comment: reviewComment.trim() || undefined,
+      });
+      setReviewOrder(null);
+      setReviewComment('');
+    } catch (err: any) {
+      alert(`Review submission failed: ${err.message}`);
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
-      {/* Top Navigation & Location Bar */}
+      {/* Top Header & Navigation */}
       <div className="bg-surface-container-lowest rounded-2xl p-5 shadow-sm border border-outline-variant/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -195,16 +314,16 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
             Discover Verified Local Dukaans
           </h1>
           <p className="font-body-md text-body-md text-on-surface-variant">
-            Browse real-time products, order ahead, and skip queues with 2-minute Smart Pickup passes.
+            Order directly from approved neighborhood merchants with 2-minute Smart Pickup or Local Delivery.
           </p>
         </div>
 
-        {/* Location Selector */}
+        {/* Location & Cart */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 bg-surface-container-low px-3.5 py-2 rounded-xl border border-outline-variant/30">
             <span className="material-symbols-outlined text-[20px] text-secondary">location_on</span>
             <div className="flex flex-col text-left">
-              <span className="text-[10px] uppercase font-bold text-on-surface-variant leading-none">Your Location</span>
+              <span className="text-[10px] uppercase font-bold text-on-surface-variant leading-none">Your Town</span>
               <select
                 value={selectedTown}
                 onChange={(e) => setSelectedTown(e.target.value)}
@@ -217,155 +336,166 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
             </div>
           </div>
 
-          {/* Cart Trigger */}
           <button
             onClick={() => setIsCartOpen(true)}
-            className="relative p-2.5 rounded-xl bg-primary text-on-primary hover:bg-neutral-800 transition flex items-center gap-2 font-label-md text-label-md font-bold"
+            className="relative px-4 py-2.5 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold shadow-xs hover:bg-neutral-800 transition flex items-center gap-2"
           >
-            <span className="material-symbols-outlined text-[20px]">shopping_bag</span>
-            <span className="hidden sm:inline">Cart</span>
+            <span className="material-symbols-outlined text-[20px]">shopping_cart</span>
+            <span>Cart ({cartItems.reduce((s, i) => s + i.quantity, 0)})</span>
             {cartItems.length > 0 && (
-              <span className="w-5 h-5 rounded-full bg-secondary text-on-secondary font-bold text-[11px] flex items-center justify-center">
-                {cartItems.reduce((sum, item) => sum + item.quantity, 0)}
+              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-secondary text-on-secondary rounded-full text-xs font-bold flex items-center justify-center">
+                {cartItems.length}
               </span>
             )}
           </button>
         </div>
       </div>
 
-      {/* Tabs: Explore Stores vs Active Passes */}
-      <div className="flex items-center gap-2 border-b border-outline-variant/20 pb-1">
+      {/* Tabs: Explore Stores vs My Digital Passes */}
+      <div className="flex items-center gap-3 border-b border-outline-variant/20 pb-2">
         <button
           onClick={() => {
             setActiveTab('explore');
             setSelectedStore(null);
           }}
-          className={`px-4 py-2 rounded-lg font-label-md text-label-md font-bold transition ${
+          className={`px-4 py-2 rounded-xl font-label-md text-label-md font-bold transition flex items-center gap-2 ${
             activeTab === 'explore'
-              ? 'bg-primary text-on-primary shadow-xs'
-              : 'text-on-surface-variant hover:text-on-surface'
+              ? 'bg-secondary text-on-secondary shadow-xs'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
           }`}
         >
-          Nearby Stores ({activeStores.length} Live)
+          <span className="material-symbols-outlined text-[18px]">storefront</span>
+          <span>Explore Dukaans ({activeStores.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('passes')}
-          className={`px-4 py-2 rounded-lg font-label-md text-label-md font-bold transition flex items-center gap-2 ${
+          className={`px-4 py-2 rounded-xl font-label-md text-label-md font-bold transition flex items-center gap-2 ${
             activeTab === 'passes'
-              ? 'bg-primary text-on-primary shadow-xs'
-              : 'text-on-surface-variant hover:text-on-surface'
+              ? 'bg-secondary text-on-secondary shadow-xs'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
           }`}
         >
-          <span>My Pickup Passes & Orders</span>
-          {customerOrders.length > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[11px] font-bold">
-              {customerOrders.length}
-            </span>
-          )}
+          <span className="material-symbols-outlined text-[18px]">confirmation_number</span>
+          <span>My Orders & Passes ({customerOrders.length})</span>
         </button>
       </div>
 
-      {/* ================= VIEW 1: STORE LISTING ================= */}
+      {/* ================= VIEW 1: EXPLORE STORES LIST ================= */}
       {activeTab === 'explore' && !selectedStore && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-headline-sm text-headline-sm font-bold text-on-surface">
-              Verified Shops in & around {selectedTown}
-            </h2>
-            <span className="font-body-sm text-body-sm text-on-surface-variant">
-              Sorted by Distance & Availability
-            </span>
+        <div className="space-y-6">
+          {/* Search & Category Filter */}
+          <div className="flex flex-col sm:flex-row items-center gap-3 bg-surface-container-lowest p-4 rounded-2xl border border-outline-variant/20 shadow-xs">
+            <div className="relative flex-1 w-full">
+              <span className="material-symbols-outlined absolute left-3 top-2.5 text-on-surface-variant text-[20px]">
+                search
+              </span>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search store name, groceries, sweets, chemist..."
+                className="w-full pl-10 pr-4 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-md text-body-md focus:outline-none focus:ring-1 focus:ring-secondary"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+              {['All', 'Kirana', 'Dairy', 'Bakery', 'Chemist'].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setCategoryFilter(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0 ${
+                    categoryFilter === cat
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {activeStores.length === 0 ? (
-            <div className="p-12 text-center bg-surface-container-lowest rounded-2xl border border-outline-variant/20 space-y-4">
-              <span className="material-symbols-outlined text-[48px] text-on-surface-variant">storefront</span>
-              <div className="space-y-1">
-                <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
-                  No verified local shops live in this area yet
-                </h3>
-                <p className="font-body-md text-body-md text-on-surface-variant max-w-md mx-auto">
-                  LocalMarket reads exclusively from live Firebase records. Register a shop now and approve it in the Super Admin Console to see it appear here live!
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-                <button
-                  onClick={onGoToRegistration}
-                  className="px-5 py-2.5 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition"
-                >
-                  + Register Your Dukaan
-                </button>
-                <button
-                  onClick={onGoToAdmin}
-                  className="px-5 py-2.5 rounded-xl bg-surface-container-low text-on-surface font-label-md text-label-md font-bold hover:bg-surface-container transition border border-outline-variant/30"
-                >
-                  Check Admin Verification Queue
-                </button>
-              </div>
+          {/* Stores List */}
+          {sortedStores.length === 0 ? (
+            <div className="p-12 text-center bg-surface-container-lowest rounded-2xl border border-outline-variant/20 space-y-4 max-w-lg mx-auto">
+              <span className="material-symbols-outlined text-[48px] text-on-surface-variant">store</span>
+              <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                No active stores found
+              </h3>
+              <p className="font-body-md text-body-md text-on-surface-variant">
+                {activeStores.length === 0
+                  ? 'No stores have been approved yet by the Super Admin. Registered stores will appear live as soon as they are verified.'
+                  : 'No stores match your search criteria in this area.'}
+              </p>
+              <button
+                onClick={onGoToRegistration}
+                className="px-5 py-2.5 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition"
+              >
+                + Onboard a New Store
+              </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {sortedStores.map((store) => {
+                const timingStatus = getStoreTimingStatus(store);
+                const offersPickup = store.fulfillmentOptions?.includes('Smart Pickup') ?? true;
                 const offersDelivery = store.fulfillmentOptions?.includes('Retailer Direct Delivery');
-                const offersPickup = store.fulfillmentOptions?.includes('Smart Pickup') !== false;
 
                 return (
                   <div
                     key={store.id}
-                    onClick={() => setSelectedStore(store)}
-                    className="p-5 rounded-2xl bg-surface-container-lowest border border-outline-variant/20 shadow-xs hover:shadow-md hover:border-secondary transition cursor-pointer flex flex-col justify-between"
+                    onClick={() => {
+                      setSelectedStore(store);
+                      setStoreTab('products');
+                    }}
+                    className="p-5 rounded-2xl bg-surface-container-lowest border border-outline-variant/20 shadow-xs hover:shadow-md hover:border-secondary transition cursor-pointer flex flex-col justify-between group"
                   >
                     <div className="space-y-3">
-                      <div className="relative">
+                      <div className="flex items-start gap-3.5">
                         <img
-                          src={store.logoUrl || 'https://via.placeholder.com/300x160'}
+                          src={store.logoUrl || 'https://via.placeholder.com/80'}
                           alt={store.shopName}
-                          className="w-full h-40 object-cover rounded-xl border border-outline-variant/20"
+                          className="w-16 h-16 rounded-xl object-cover border border-outline-variant/20 shrink-0 group-hover:scale-105 transition"
                         />
-                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full bg-secondary text-on-secondary font-label-sm text-[11px] font-bold shadow-xs">
-                          {store.distanceKm} km away
-                        </span>
-                        <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded bg-surface-container-lowest/90 backdrop-blur-xs text-on-surface font-label-sm text-[11px] font-bold shadow-xs">
-                          Prep: {store.preparationTime || '15 mins'}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${timingStatus.color}`}>
+                              {timingStatus.text}
+                            </span>
+                            <span className="text-[11px] font-bold text-secondary">
+                              📍 {store.distanceKm} km away
+                            </span>
+                          </div>
+                          <h3 className="font-headline-sm text-[17px] font-bold text-on-surface truncate mt-1">
+                            {store.shopName}
+                          </h3>
+                          <p className="font-body-sm text-[12px] text-on-surface-variant truncate">
+                            {store.category} • {store.area}
+                          </p>
+                        </div>
                       </div>
 
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-on-surface-variant uppercase">
-                            {store.category}
-                          </span>
-                          <span className="text-[11px] font-bold text-secondary flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-secondary" />
-                            Open ({store.openingTime} - {store.closingTime})
-                          </span>
-                        </div>
-                        <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface mt-1">
-                          {store.shopName}
-                        </h3>
-                        <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5 line-clamp-2">
-                          {store.description || store.address}
-                        </p>
-                      </div>
+                      <p className="font-body-sm text-body-sm text-on-surface-variant line-clamp-2">
+                        {store.description}
+                      </p>
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-outline-variant/20 flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
                         {offersPickup && (
                           <span className="px-2 py-0.5 rounded bg-secondary-container text-on-secondary-container text-[11px] font-bold">
-                            Pickup Available
+                            🛍️ Pickup
                           </span>
                         )}
                         {offersDelivery && (
                           <span className="px-2 py-0.5 rounded bg-surface-container text-on-surface-variant text-[11px] font-bold">
-                            + Delivery
+                            🛵 Delivery
                           </span>
                         )}
                       </div>
 
-                      <span className="text-secondary font-bold text-label-sm flex items-center gap-0.5">
+                      <span className="text-secondary font-bold text-label-sm flex items-center gap-0.5 group-hover:translate-x-1 transition">
                         <span>Browse Shop</span>
                         <span className="material-symbols-outlined text-[16px]">chevron_right</span>
                       </span>
@@ -378,10 +508,9 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
         </div>
       )}
 
-      {/* ================= VIEW 2: STORE DETAIL & PRODUCT MENU ================= */}
+      {/* ================= VIEW 2: STORE DETAIL & PRODUCTS MENU ================= */}
       {activeTab === 'explore' && selectedStore && (
         <div className="space-y-6">
-          {/* Back button */}
           <button
             onClick={() => setSelectedStore(null)}
             className="flex items-center gap-1 text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-bold transition"
@@ -390,11 +519,11 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
             <span>Back to All Stores in {selectedTown}</span>
           </button>
 
-          {/* Store Header Banner */}
+          {/* Store Hero Banner */}
           <div className="bg-surface-container-lowest rounded-2xl p-6 shadow-sm border border-outline-variant/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start gap-4">
               <img
-                src={selectedStore.logoUrl}
+                src={selectedStore.logoUrl || 'https://via.placeholder.com/80'}
                 alt={selectedStore.shopName}
                 className="w-20 h-20 rounded-2xl object-cover border border-outline-variant/30 shadow-xs"
               />
@@ -403,120 +532,204 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                   <h2 className="font-headline-lg text-headline-lg font-bold text-on-surface">
                     {selectedStore.shopName}
                   </h2>
+                  <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${getStoreTimingStatus(selectedStore).color}`}>
+                    {getStoreTimingStatus(selectedStore).text}
+                  </span>
                   <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold">
-                    ✓ Verified Local Merchant
+                    ✓ Verified Storefront
                   </span>
                 </div>
                 <p className="font-body-sm text-body-sm text-on-surface-variant">
-                  {selectedStore.address}, {selectedStore.city} • Open {selectedStore.openingTime} - {selectedStore.closingTime}
+                  {selectedStore.address}, {selectedStore.city} • Regular Hours: {selectedStore.openingTime} - {selectedStore.closingTime}
                 </p>
-                <div className="flex items-center gap-2 text-[12px] font-bold text-secondary pt-1">
+                <div className="flex items-center gap-2 text-[12px] font-bold text-secondary pt-1 flex-wrap">
                   <span>⏱️ Handover SLA: {selectedStore.preparationTime || '15 mins'}</span>
                   <span>•</span>
                   <span>📍 {selectedStore.area}</span>
+                  {storeReviews.length > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="text-amber-600">
+                        ⭐ {(storeReviews.reduce((s, r) => s + r.rating, 0) / storeReviews.length).toFixed(1)} ({storeReviews.length} reviews)
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-col md:items-end gap-2">
-              <div className="flex items-center gap-1.5">
-                <span className="px-2.5 py-1 rounded-lg bg-surface-container font-label-sm text-label-sm font-bold text-on-surface">
-                  Smart Pickup Enabled
-                </span>
-                {selectedStore.fulfillmentOptions?.includes('Retailer Direct Delivery') && (
-                  <span className="px-2.5 py-1 rounded-lg bg-surface-container font-label-sm text-label-sm font-bold text-on-surface">
-                    Direct Delivery
-                  </span>
-                )}
-              </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setStoreTab('products')}
+                className={`px-3 py-1.5 rounded-lg font-label-sm text-label-sm font-bold transition ${
+                  storeTab === 'products'
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                Products ({storeProducts.length})
+              </button>
+              <button
+                onClick={() => setStoreTab('reviews')}
+                className={`px-3 py-1.5 rounded-lg font-label-sm text-label-sm font-bold transition ${
+                  storeTab === 'reviews'
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                Reviews ({storeReviews.length})
+              </button>
             </div>
           </div>
 
-          {/* Products Grid */}
-          <div className="space-y-4">
-            <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
-              Available Store Products ({storeProducts.length})
-            </h3>
+          {/* Tab 1: Products */}
+          {storeTab === 'products' && (
+            <div className="space-y-4">
+              <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                Catalog & Inventory ({storeProducts.length})
+              </h3>
 
-            {storeProducts.length === 0 ? (
-              <div className="p-8 text-center bg-surface-container-lowest rounded-2xl border border-outline-variant/20 space-y-2">
-                <p className="font-headline-sm text-headline-sm font-bold text-on-surface">
-                  No products uploaded yet by this merchant
-                </p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant">
-                  The retailer can log in to their dashboard to add catalog inventory.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {storeProducts.map((product) => {
-                  const inCartQty = cart[product.id]?.quantity || 0;
+              {storeProducts.length === 0 ? (
+                <div className="p-8 text-center bg-surface-container-lowest rounded-2xl border border-outline-variant/20 space-y-2">
+                  <p className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                    No products uploaded yet by this merchant
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    The merchant can add products anytime through their Retailer Dashboard.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {storeProducts.map((product) => {
+                    const inCartQty = cart[product.id]?.quantity || 0;
 
-                  return (
-                    <div
-                      key={product.id}
-                      className="p-4 rounded-xl bg-surface-container-lowest border border-outline-variant/20 shadow-xs flex flex-col justify-between"
-                    >
-                      <div className="space-y-2.5">
-                        <img
-                          src={product.imageUrl}
-                          alt={product.name}
-                          className="w-full h-36 object-cover rounded-lg border border-outline-variant/20"
-                        />
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-on-surface-variant uppercase">
+                    return (
+                      <div
+                        key={product.id}
+                        className="p-4 rounded-xl bg-surface-container-lowest border border-outline-variant/20 shadow-xs flex flex-col justify-between"
+                      >
+                        <div className="space-y-2">
+                          <img
+                            src={product.imageUrl || 'https://via.placeholder.com/300'}
+                            alt={product.name}
+                            className="w-full h-36 object-cover rounded-lg border border-outline-variant/20"
+                          />
+                          <div>
+                            <span className="text-[10px] font-bold text-on-surface-variant uppercase">
                               {product.category}
                             </span>
-                            <span className="text-[11px] font-bold text-secondary">
-                              In Stock ({product.stock})
+                            <h4 className="font-headline-sm text-[15px] font-bold text-on-surface truncate">
+                              {product.name}
+                            </h4>
+                            <p className="font-body-sm text-[12px] text-on-surface-variant line-clamp-2">
+                              {product.description}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-2 border-t border-outline-variant/20 flex items-center justify-between">
+                          <div>
+                            <span className="font-headline-sm text-[17px] font-bold text-on-surface">
+                              ₹{product.price}
                             </span>
                           </div>
-                          <h4 className="font-label-lg text-label-lg font-bold text-on-surface mt-0.5">
-                            {product.name}
-                          </h4>
-                          <p className="font-body-sm text-body-sm text-on-surface-variant line-clamp-2 mt-0.5">
-                            {product.description}
-                          </p>
+
+                          {inCartQty === 0 ? (
+                            <button
+                              disabled={!product.available || product.stock <= 0}
+                              onClick={() => addToCart(product)}
+                              className="px-3 py-1.5 rounded-lg bg-secondary text-on-secondary font-label-sm text-label-sm font-bold shadow-xs hover:opacity-95 disabled:opacity-50 transition"
+                            >
+                              + Add
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1.5 bg-secondary-container px-2 py-1 rounded-lg">
+                              <button
+                                onClick={() => updateQuantity(product.id, -1)}
+                                className="w-5 h-5 rounded bg-surface-container-lowest font-bold text-on-surface flex items-center justify-center hover:bg-surface-container"
+                              >
+                                -
+                              </button>
+                              <span className="font-bold text-on-surface text-xs px-1">{inCartQty}</span>
+                              <button
+                                onClick={() => updateQuantity(product.id, 1)}
+                                className="w-5 h-5 rounded bg-surface-container-lowest font-bold text-on-surface flex items-center justify-center hover:bg-surface-container"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
-                      <div className="mt-4 pt-3 border-t border-outline-variant/20 flex items-center justify-between">
-                        <span className="font-headline-sm text-[18px] font-bold text-on-surface">
-                          ₹{product.price}
+          {/* Tab 2: Reviews */}
+          {storeTab === 'reviews' && (
+            <div className="space-y-4">
+              <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                Customer Reviews & Ratings ({storeReviews.length})
+              </h3>
+
+              {storeReviews.length === 0 ? (
+                <div className="p-8 text-center bg-surface-container-lowest rounded-2xl border border-outline-variant/20 space-y-2">
+                  <p className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                    No customer reviews yet
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    Completed orders can be rated by customers right after picking up or receiving their delivery.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {storeReviews.map((rev) => (
+                    <div
+                      key={rev.id}
+                      className="p-4 rounded-xl bg-surface-container-lowest border border-outline-variant/20 shadow-xs space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1 text-amber-500">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <span key={i} className="material-symbols-outlined text-[18px]">
+                              {i < rev.rating ? 'star' : 'star_outline'}
+                            </span>
+                          ))}
+                        </div>
+                        <span className="text-[12px] text-on-surface-variant font-mono">
+                          {new Date(rev.createdAt).toLocaleDateString()}
                         </span>
-
-                        {inCartQty === 0 ? (
-                          <button
-                            onClick={() => addToCart(product)}
-                            className="px-4 py-1.5 rounded-lg bg-primary text-on-primary font-label-md text-label-md font-bold shadow-xs hover:bg-neutral-800 transition"
-                          >
-                            + Add to Cart
-                          </button>
-                        ) : (
-                          <div className="flex items-center gap-2 bg-surface-container-low px-2 py-1 rounded-lg border border-outline-variant/30">
-                            <button
-                              onClick={() => updateQuantity(product.id, -1)}
-                              className="w-6 h-6 rounded bg-surface-container-lowest font-bold text-on-surface flex items-center justify-center hover:bg-surface-container"
-                            >
-                              -
-                            </button>
-                            <span className="font-bold text-on-surface text-sm px-1">{inCartQty}</span>
-                            <button
-                              onClick={() => updateQuantity(product.id, 1)}
-                              className="w-6 h-6 rounded bg-surface-container-lowest font-bold text-on-surface flex items-center justify-center hover:bg-surface-container"
-                            >
-                              +
-                            </button>
-                          </div>
-                        )}
                       </div>
+
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {rev.tags?.map((t, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[11px] font-bold"
+                          >
+                            ✓ {t}
+                          </span>
+                        ))}
+                      </div>
+
+                      {rev.comment && (
+                        <p className="font-body-sm text-body-sm text-on-surface italic pt-1">
+                          "{rev.comment}"
+                        </p>
+                      )}
+
+                      <p className="text-[11px] font-semibold text-on-surface-variant">
+                        By {rev.customerName || 'Verified Customer'}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -556,6 +769,15 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                 const isReady = order.status === 'ready';
                 const isArrived = order.status === 'arrived';
                 const isCompleted = order.status === 'completed';
+                const isCancelled = order.status === 'cancelled';
+
+                // Check 5-minute modification window
+                const now = Date.now();
+                const expiresAt = order.editWindowExpiresAt ? new Date(order.editWindowExpiresAt).getTime() : 0;
+                const remainingMs = Math.max(0, expiresAt - now);
+                const canModify = remainingMs > 0 && (order.status === 'placed' || order.status === 'pending');
+                const remainingMins = Math.floor(remainingMs / 60000);
+                const remainingSecs = Math.floor((remainingMs % 60000) / 1000);
 
                 return (
                   <div
@@ -563,6 +785,8 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                     className={`p-6 rounded-2xl bg-surface-container-lowest border space-y-4 shadow-sm ${
                       isReady || isArrived
                         ? 'border-secondary ring-2 ring-secondary/30'
+                        : isCancelled
+                        ? 'border-error/40 opacity-75'
                         : 'border-outline-variant/20'
                     }`}
                   >
@@ -581,9 +805,11 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                       <span
                         className={`px-3 py-1 rounded-full font-label-sm text-label-sm font-bold uppercase ${
                           isCompleted
-                            ? 'bg-surface-container text-on-surface-variant'
-                            : isArrived
                             ? 'bg-secondary text-on-secondary'
+                            : isCancelled
+                            ? 'bg-error-container text-on-error-container'
+                            : isArrived
+                            ? 'bg-secondary-container text-on-secondary-container'
                             : isReady
                             ? 'bg-secondary-container text-on-secondary-container animate-pulse'
                             : 'bg-tertiary-fixed text-on-tertiary-fixed'
@@ -593,12 +819,30 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                       </span>
                     </div>
 
-                    {/* QR Code Pass Box */}
-                    {order.fulfillmentType === 'Smart Pickup' && (
+                    {/* 5-Minute Window Notification & Cancel/Edit Option */}
+                    {canModify && (
+                      <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-center justify-between gap-3 text-amber-900">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold">
+                          <span className="material-symbols-outlined text-[18px] text-amber-700">timer</span>
+                          <span>
+                            Edit/Cancel window: <strong>{remainingMins}m {remainingSecs}s</strong> remaining
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleCancelOrder(order)}
+                          className="px-2.5 py-1 rounded bg-error-container text-on-error-container text-xs font-bold hover:opacity-90"
+                        >
+                          Cancel Order
+                        </button>
+                      </div>
+                    )}
+
+                    {/* QR Code Pass Box for Smart Pickup */}
+                    {order.fulfillmentType === 'Smart Pickup' && !isCancelled && (
                       <div className="p-4 bg-surface-container-low rounded-xl border border-outline-variant/30 flex items-center justify-between gap-4">
                         <div className="space-y-1">
                           <p className="font-label-md text-label-md font-bold text-on-surface">
-                            Digital Pickup Pass
+                            Digital Counter Pass
                           </p>
                           <p className="text-[12px] text-on-surface-variant">
                             Selected ETA: <strong>{order.customerETA}</strong>
@@ -608,17 +852,10 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                           </p>
                         </div>
 
-                        {/* Simulated QR Code Graphic */}
-                        <div className="w-20 h-20 bg-surface-container-lowest p-1.5 rounded-lg border border-outline-variant/40 flex flex-col justify-between shadow-xs">
-                          <div className="flex justify-between">
-                            <div className="w-5 h-5 bg-black rounded-xs" />
-                            <div className="w-5 h-5 bg-black rounded-xs" />
-                          </div>
-                          <div className="text-[8px] font-mono text-center text-on-surface-variant">TOKEN</div>
-                          <div className="flex justify-between">
-                            <div className="w-5 h-5 bg-black rounded-xs" />
-                            <div className="w-3 h-3 bg-secondary rounded-full" />
-                          </div>
+                        {/* Pass Token Tile */}
+                        <div className="w-20 h-20 bg-surface-container-lowest p-2 rounded-lg border border-outline-variant/40 flex flex-col justify-between items-center shadow-xs">
+                          <span className="material-symbols-outlined text-[32px] text-primary">qr_code_2</span>
+                          <span className="text-[8px] font-mono font-bold text-on-surface-variant">TOKEN</span>
                         </div>
                       </div>
                     )}
@@ -627,18 +864,20 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                     <div className="text-body-sm font-body-sm text-on-surface-variant space-y-1">
                       {order.items.map((it, idx) => (
                         <div key={idx} className="flex justify-between">
-                          <span>{it.quantity}x {it.name}</span>
+                          <span>
+                            {it.quantity}x {it.name}
+                          </span>
                           <span className="font-semibold text-on-surface">₹{it.price * it.quantity}</span>
                         </div>
                       ))}
                       <div className="flex justify-between font-bold text-on-surface pt-2 border-t border-outline-variant/20">
-                        <span>Total Paid</span>
+                        <span>Total Paid ({order.paymentMethod === 'upi_qr' ? 'Direct UPI' : 'Counter'})</span>
                         <span className="text-secondary font-bold">₹{order.totalAmount}</span>
                       </div>
                     </div>
 
                     {/* "I'M HERE" Action Button */}
-                    {!isCompleted && (
+                    {!isCompleted && !isCancelled && (
                       <div className="pt-2">
                         {!isArrived ? (
                           <button
@@ -650,15 +889,32 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                           </button>
                         ) : (
                           <div className="p-3 bg-secondary-container rounded-xl text-center font-label-md text-label-md font-bold text-on-secondary-container">
-                            ✓ Counter notified! Show your pass to collect your items.
+                            ✓ Counter notified! Present your token at billing desk.
                           </div>
                         )}
                       </div>
                     )}
 
+                    {/* Completed Handover & Review prompt */}
                     {isCompleted && (
-                      <div className="p-2.5 bg-surface-container rounded-lg text-center font-label-sm text-label-sm font-bold text-secondary">
-                        ✓ Order Collected & Handover Verified
+                      <div className="pt-2 space-y-2">
+                        <div className="p-2.5 bg-secondary-container rounded-lg text-center font-label-sm text-label-sm font-bold text-on-secondary-container">
+                          ✓ Order Collected & Handover Verified
+                        </div>
+
+                        {!order.rated ? (
+                          <button
+                            onClick={() => setReviewOrder(order)}
+                            className="w-full py-2 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition flex items-center justify-center gap-1.5"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">rate_review</span>
+                            <span>Rate & Review Storefront</span>
+                          </button>
+                        ) : (
+                          <p className="text-center text-xs font-bold text-secondary">
+                            ★ Thank you for rating this store!
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -697,7 +953,7 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                   <p className="font-body-sm text-body-sm">Add items from the store to proceed.</p>
                 </div>
               ) : (
-                <div className="space-y-4 pt-4 overflow-y-auto max-h-[50vh]">
+                <div className="space-y-4 pt-4 overflow-y-auto max-h-[60vh] pr-1">
                   {cartItems.map(({ product, quantity }) => (
                     <div key={product.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-xl">
                       <div>
@@ -755,7 +1011,7 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                         </button>
                       ) : (
                         <div className="p-2.5 rounded-xl bg-surface-container-low/60 border border-outline-variant/20 opacity-60 text-[11px] text-on-surface-variant">
-                          Store Delivery Disabled by Merchant
+                          Store Delivery Disabled
                         </div>
                       )}
                     </div>
@@ -800,6 +1056,81 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                       />
                     </div>
                   )}
+
+                  {/* Payment Method Section */}
+                  <div className="space-y-2 pt-2 border-t border-outline-variant/20">
+                    <label className="block font-label-md text-label-md font-bold text-on-surface">
+                      Payment Option:
+                    </label>
+
+                    <div className="space-y-2">
+                      {selectedStore?.paymentQrUrl ? (
+                        <div
+                          onClick={() => setPaymentMethod('upi_qr')}
+                          className={`p-3 rounded-xl border cursor-pointer transition ${
+                            paymentMethod === 'upi_qr'
+                              ? 'bg-secondary-container/30 border-secondary ring-1 ring-secondary'
+                              : 'bg-surface-container-low border-outline-variant/30'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-secondary text-[20px]">qr_code</span>
+                              <span className="font-bold text-on-surface text-sm">Pay Directly to Store (UPI QR)</span>
+                            </div>
+                            <span className="text-[10px] font-bold uppercase bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded">
+                              Direct UPI
+                            </span>
+                          </div>
+
+                          {paymentMethod === 'upi_qr' && (
+                            <div className="mt-3 p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/30 flex flex-col items-center text-center space-y-2">
+                              <p className="text-xs font-bold text-secondary uppercase">
+                                Scan & Pay Directly to {selectedStore.shopName}
+                              </p>
+                              <img
+                                src={selectedStore.paymentQrUrl}
+                                alt="Store UPI QR Code"
+                                className="w-36 h-36 object-contain rounded-lg border border-outline-variant/30 shadow-xs"
+                              />
+                              <p className="text-[11px] text-on-surface-variant font-mono">
+                                Amount to pay: <strong>₹{cartTotal}</strong>
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => setPaymentMethod('upi_qr')}
+                          className={`p-3 rounded-xl border cursor-pointer ${
+                            paymentMethod === 'upi_qr'
+                              ? 'bg-secondary-container/30 border-secondary'
+                              : 'bg-surface-container-low border-outline-variant/30'
+                          }`}
+                        >
+                          <span className="font-bold text-on-surface text-sm">UPI Payment</span>
+                        </div>
+                      )}
+
+                      <div
+                        onClick={() => setPaymentMethod('pay_at_store')}
+                        className={`p-3 rounded-xl border cursor-pointer transition ${
+                          paymentMethod === 'pay_at_store'
+                            ? 'bg-secondary-container/30 border-secondary ring-1 ring-secondary'
+                            : 'bg-surface-container-low border-outline-variant/30'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-[20px]">payments</span>
+                            <span className="font-bold text-on-surface text-sm">
+                              {fulfillmentType === 'Smart Pickup' ? 'Pay at Counter (Cash/Card)' : 'Cash on Delivery'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -817,13 +1148,126 @@ export const CustomerAppView: React.FC<CustomerAppViewProps> = ({
                 className="w-full py-3 rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-bold shadow-md hover:bg-neutral-800 disabled:opacity-50 transition flex items-center justify-center gap-2"
               >
                 {isPlacingOrder ? (
-                  <span>Placing Order into Firestore...</span>
+                  <span>Generating Order Pass...</span>
                 ) : (
                   <>
                     <span className="material-symbols-outlined text-[20px]">bolt</span>
                     <span>Confirm & Generate Digital Pass (₹{cartTotal})</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REVIEW & RATING MODAL ================= */}
+      {reviewOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setReviewOrder(null)} />
+          <div className="relative w-full max-w-md bg-surface-container-lowest rounded-2xl shadow-2xl p-6 z-10 border border-outline-variant/30 space-y-4">
+            <div className="flex items-center justify-between border-b border-outline-variant/20 pb-3">
+              <div>
+                <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface">
+                  Rate Your Experience
+                </h3>
+                <p className="text-xs text-on-surface-variant font-semibold">
+                  {reviewOrder.retailerName} ({reviewOrder.orderNumber})
+                </p>
+              </div>
+              <button
+                onClick={() => setReviewOrder(null)}
+                className="p-1 rounded-lg text-on-surface-variant hover:bg-surface-container"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            {/* Star Rating Selector */}
+            <div className="flex items-center justify-center gap-2 py-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setRatingVal(star)}
+                  className="p-1 hover:scale-110 transition"
+                >
+                  <span
+                    className={`material-symbols-outlined text-[36px] ${
+                      star <= ratingVal ? 'text-amber-500' : 'text-outline-variant'
+                    }`}
+                  >
+                    star
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Quick Feedback Tags */}
+            <div>
+              <label className="block text-xs font-bold uppercase text-on-surface-variant mb-1.5">
+                What went well?
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Quick Counter Pickup',
+                  'Fresh Quality',
+                  'Accurate Items',
+                  'Friendly Staff',
+                  'Great Packaging',
+                ].map((tag) => {
+                  const isSelected = selectedTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTags((prev) =>
+                          isSelected ? prev.filter((t) => t !== tag) : [...prev, tag]
+                        );
+                      }}
+                      className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+                        isSelected
+                          ? 'bg-secondary-container text-on-secondary-container border-secondary'
+                          : 'bg-surface-container-low text-on-surface-variant border-outline-variant/30'
+                      }`}
+                    >
+                      {isSelected ? '✓ ' : ''}{tag}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Optional Comment */}
+            <div>
+              <label className="block text-xs font-bold uppercase text-on-surface-variant mb-1">
+                Your Review (Optional)
+              </label>
+              <textarea
+                rows={3}
+                value={reviewComment}
+                onChange={(e) => setReviewComment(e.target.value)}
+                placeholder="Share your experience picking up from this shop..."
+                className="w-full px-3.5 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface font-body-sm text-body-sm focus:outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant/20">
+              <button
+                type="button"
+                onClick={() => setReviewOrder(null)}
+                className="px-4 py-2 rounded-xl text-on-surface font-label-md text-label-md hover:bg-surface-container"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingReview}
+                onClick={handleSubmitReview}
+                className="px-6 py-2 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold hover:bg-neutral-800 transition"
+              >
+                {isSubmittingReview ? 'Submitting...' : 'Submit Review'}
               </button>
             </div>
           </div>

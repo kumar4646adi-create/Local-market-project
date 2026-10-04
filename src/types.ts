@@ -31,28 +31,43 @@ export interface Retailer {
   ownerName: string;
   shopName: string;
   category: string;
+  subCategory?: string;
+  gstin?: string;
   phone: string;
   email: string;
   address: string;
-  city: string;
+  houseNumber?: string;
+  street?: string;
   area: string;
+  city: string;
+  district?: string;
+  state?: string;
   pincode: string;
   latitude: number;
   longitude: number;
   openingTime: string;
   closingTime: string;
   closedDay: string;
+  closedDays?: string[];
+  temporarilyClosed?: boolean;
   logoUrl: string;
+  shopImageUrl?: string;
+  shopGallery?: string[];
+  paymentQrUrl?: string;
   description: string;
   fulfillmentOptions: ('Smart Pickup' | 'Retailer Direct Delivery')[];
+  pickupEnabled?: boolean;
+  deliveryEnabled?: boolean;
   preparationTime: string;
   status: RetailerStatus;
+  ratingAverage?: number;
+  ratingCount?: number;
   createdAt: string;
   approvedAt?: string;
   approvedBy?: string;
   rejectionReason?: string;
   resubmissionNotes?: string;
-  // Optional convenience properties
+  // Optional convenience & compliance properties
   name?: string;
   proprietor?: string;
   town?: string;
@@ -65,8 +80,6 @@ export interface Retailer {
   headerImage?: string;
   docsPreCleared?: string;
   sla?: string;
-  pickupEnabled?: boolean;
-  deliveryEnabled?: boolean;
   coordinates?: {
     lat: number;
     lng: number;
@@ -103,13 +116,11 @@ export interface Retailer {
     };
   };
   catalog?: SKUItem[];
+  bankName?: string;
+  upiId?: string;
   dossierNumber?: string;
   fssaiNumber?: string;
   udyamNumber?: string;
-  bankName?: string;
-  accountMasked?: string;
-  ifsc?: string;
-  upiId?: string;
 }
 
 export interface Product {
@@ -119,6 +130,7 @@ export interface Product {
   category: string;
   imageUrl: string;
   price: number;
+  discount?: number;
   stock: number;
   available: boolean;
   description: string;
@@ -132,7 +144,28 @@ export interface OrderItem {
   name: string;
   price: number;
   quantity: number;
+  imageUrl?: string;
+  unit?: string;
 }
+
+export type OrderStatus =
+  | 'pending'
+  | 'placed'
+  | 'accepted'
+  | 'preparing'
+  | 'ready'
+  | 'customer_arriving'
+  | 'arrived'
+  | 'verified'
+  | 'collected'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'completed'
+  | 'rejected'
+  | 'cancelled';
+
+export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type PaymentMethod = 'pay_online' | 'pay_at_store' | 'upi_qr';
 
 export interface Order {
   id: string;
@@ -145,12 +178,42 @@ export interface Order {
   totalAmount: number;
   fulfillmentType: 'Smart Pickup' | 'Store Delivery';
   customerETA: string;
-  status: 'pending' | 'preparing' | 'ready' | 'arrived' | 'completed' | 'cancelled';
+  status: OrderStatus;
+  paymentStatus?: PaymentStatus;
+  paymentMethod?: PaymentMethod;
   orderNumber: string;
   qrCodeToken?: string;
   createdAt: string;
   updatedAt: string;
+  placedAt?: string;
+  completedAt?: string;
+  editWindowExpiresAt?: string; // ISO String 5 minutes from placedAt
   deliveryAddress?: string;
+  rejectionReason?: string;
+  rated?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  retailerId: string;
+  customerId: string;
+  customerName: string;
+  sender: 'customer' | 'retailer';
+  text: string;
+  createdAt: string;
+  orderId?: string;
+}
+
+export interface StoreReview {
+  id: string;
+  retailerId: string;
+  orderId: string;
+  customerId: string;
+  customerName: string;
+  rating: number; // 1-5
+  tags: string[];
+  comment?: string;
+  createdAt: string;
 }
 
 export interface LiveOrder {

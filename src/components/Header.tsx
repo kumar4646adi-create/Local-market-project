@@ -23,7 +23,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   return (
-    <header className="fixed top-0 left-0 lg:left-72 right-0 h-16 bg-surface-container-lowest/90 backdrop-blur-xl z-40 shadow-[0_1px_8px_rgba(0,0,0,0.04)] px-3 sm:px-6 flex items-center justify-between border-b border-outline-variant/20">
+    <header className={`fixed top-0 left-0 ${currentRole === 'admin' ? 'lg:left-72' : ''} right-0 h-16 bg-surface-container-lowest/90 backdrop-blur-xl z-40 shadow-[0_1px_8px_rgba(0,0,0,0.04)] px-3 sm:px-6 flex items-center justify-between border-b border-outline-variant/20`}>
       {/* Left: Mobile Toggle, Portal Switcher & Territory Picker */}
       <div className="flex items-center gap-2 sm:gap-3">
         <button

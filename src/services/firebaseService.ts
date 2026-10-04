@@ -12,7 +12,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { Retailer, Product, Order, RetailerStatus } from '../types';
+import { Retailer, Product, Order, RetailerStatus, ChatMessage, StoreReview } from '../types';
 
 // ==================== RETAILERS ====================
 
@@ -149,7 +149,7 @@ export function subscribeRetailerProducts(
   );
 }
 
-export async function addProduct(product: Omit<Product, 'id'>): Promise<string> {
+export async function addProduct(product: Omit<Product, 'id' | 'createdAt'>): Promise<string> {
   const colRef = collection(db, 'products');
   try {
     const docRef = await addDoc(colRef, {
@@ -285,6 +285,112 @@ export async function updateOrderStatus(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    throw error;
+  }
+}
+
+export async function updateOrder(orderId: string, updates: Partial<Order>) {
+  const docRef = doc(db, 'orders', orderId);
+  try {
+    await updateDoc(docRef, {
+      ...updates,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    throw error;
+  }
+}
+
+// ==================== CHAT MESSAGES ====================
+
+export function subscribeMessages(
+  retailerId: string,
+  customerId: string | undefined,
+  onData: (messages: ChatMessage[]) => void,
+  onError?: (err: any) => void
+) {
+  const colRef = collection(db, 'messages');
+  let q;
+  if (customerId) {
+    q = query(colRef, where('retailerId', '==', retailerId), where('customerId', '==', customerId));
+  } else {
+    q = query(colRef, where('retailerId', '==', retailerId));
+  }
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const messages = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      })) as ChatMessage[];
+      messages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      onData(messages);
+    },
+    (error) => {
+      onData([]);
+      onError?.(error);
+    }
+  );
+}
+
+export async function sendMessage(msg: Omit<ChatMessage, 'id' | 'createdAt'>): Promise<string> {
+  const colRef = collection(db, 'messages');
+  try {
+    const docRef = await addDoc(colRef, {
+      ...msg,
+      createdAt: new Date().toISOString()
+    });
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'messages');
+    throw error;
+  }
+}
+
+// ==================== STORE REVIEWS ====================
+
+export function subscribeStoreReviews(
+  retailerId: string,
+  onData: (reviews: StoreReview[]) => void,
+  onError?: (err: any) => void
+) {
+  const colRef = collection(db, 'reviews');
+  const q = query(colRef, where('retailerId', '==', retailerId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const reviews = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      })) as StoreReview[];
+      reviews.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      onData(reviews);
+    },
+    (error) => {
+      onData([]);
+      onError?.(error);
+    }
+  );
+}
+
+export async function addStoreReview(review: Omit<StoreReview, 'id' | 'createdAt'>): Promise<string> {
+  const colRef = collection(db, 'reviews');
+  try {
+    const docRef = await addDoc(colRef, {
+      ...review,
+      createdAt: new Date().toISOString()
+    });
+
+    // Mark order as rated
+    if (review.orderId) {
+      await updateOrderStatus(review.orderId, 'completed', { rated: true });
+    }
+
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'reviews');
     throw error;
   }
 }

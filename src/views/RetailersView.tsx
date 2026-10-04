@@ -409,11 +409,27 @@ export const RetailersView: React.FC<RetailersViewProps> = ({
                               {selectedRetailer.email}
                             </span>
                           )}
+                          {selectedRetailer.gstin && (
+                            <span className="px-2 py-0.5 rounded bg-surface-container font-mono font-bold text-xs text-on-surface border border-outline-variant/30">
+                              GSTIN: {selectedRetailer.gstin}
+                            </span>
+                          )}
                         </div>
-                        <p className="font-body-sm text-body-sm text-on-surface-variant flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[16px]">location_on</span>
-                          {selectedRetailer.address}, {selectedRetailer.city} - {selectedRetailer.pincode}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-3 font-body-sm text-body-sm text-on-surface-variant">
+                          <p className="flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[16px]">location_on</span>
+                            {selectedRetailer.address}, {selectedRetailer.city} - {selectedRetailer.pincode}
+                          </p>
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${selectedRetailer.latitude},${selectedRetailer.longitude}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-bold text-secondary hover:underline bg-secondary-container/40 px-2 py-0.5 rounded"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">map</span>
+                            View on Google Maps ({selectedRetailer.latitude.toFixed(4)}, {selectedRetailer.longitude.toFixed(4)})
+                          </a>
+                        </div>
                       </div>
                     </div>
 
@@ -429,6 +445,44 @@ export const RetailersView: React.FC<RetailersViewProps> = ({
                       </span>
                     </div>
                   </div>
+
+                  {/* Uploaded Shop Photo & Payment QR Preview */}
+                  {(selectedRetailer.shopImageUrl || selectedRetailer.paymentQrUrl) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      {selectedRetailer.shopImageUrl && (
+                        <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/20 space-y-1.5">
+                          <span className="text-xs font-bold uppercase text-on-surface-variant flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[15px]">storefront</span>
+                            Shopfront Counter Photograph
+                          </span>
+                          <img
+                            src={selectedRetailer.shopImageUrl}
+                            alt="Shopfront"
+                            className="w-full h-32 object-cover rounded-lg border border-outline-variant/30"
+                          />
+                        </div>
+                      )}
+                      {selectedRetailer.paymentQrUrl && (
+                        <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/20 space-y-1.5 flex flex-col justify-between">
+                          <span className="text-xs font-bold uppercase text-secondary flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[15px]">qr_code_2</span>
+                            Merchant Direct UPI Payment QR
+                          </span>
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={selectedRetailer.paymentQrUrl}
+                              alt="Payment QR"
+                              className="w-24 h-24 object-contain rounded-lg bg-white p-1 border border-outline-variant/30"
+                            />
+                            <div className="text-xs text-on-surface-variant">
+                              <p className="font-bold text-on-surface">Verified Merchant QR</p>
+                              <p className="mt-0.5">Customers can scan to pay directly to this store during checkout or pickup.</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Fulfillment Configuration */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
